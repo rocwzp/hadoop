@@ -110,8 +110,14 @@ public class TestFileTruncate {
 
   @After
   public void tearDown() throws IOException {
-    if(fs != null)      fs.close();
-    if(cluster != null) cluster.shutdown();
+    if(fs != null) {
+      fs.close();
+      fs = null;
+    }
+    if(cluster != null) {
+      cluster.shutdown();
+      cluster = null;
+    }
   }
 
   /**
@@ -1014,7 +1020,7 @@ public class TestFileTruncate {
       assertThat(truncateBlock.getNumBytes(),
           is(oldBlock.getNumBytes()));
       assertThat(truncateBlock.getGenerationStamp(),
-          is(fsn.getBlockIdManager().getGenerationStampV2()));
+          is(fsn.getBlockManager().getBlockIdManager().getGenerationStampV2()));
       assertThat(file.getLastBlock().getBlockUCState(),
           is(HdfsServerConstants.BlockUCState.UNDER_RECOVERY));
       long blockRecoveryId = file.getLastBlock().getUnderConstructionFeature()
@@ -1048,7 +1054,7 @@ public class TestFileTruncate {
       assertThat(truncateBlock.getNumBytes() < oldBlock.getNumBytes(),
           is(true));
       assertThat(truncateBlock.getGenerationStamp(),
-          is(fsn.getBlockIdManager().getGenerationStampV2()));
+          is(fsn.getBlockManager().getBlockIdManager().getGenerationStampV2()));
       assertThat(file.getLastBlock().getBlockUCState(),
           is(HdfsServerConstants.BlockUCState.UNDER_RECOVERY));
       long blockRecoveryId = file.getLastBlock().getUnderConstructionFeature()

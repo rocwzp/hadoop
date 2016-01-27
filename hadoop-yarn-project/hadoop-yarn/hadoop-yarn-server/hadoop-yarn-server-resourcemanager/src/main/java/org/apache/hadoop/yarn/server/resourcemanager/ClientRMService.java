@@ -292,12 +292,13 @@ public class ClientRMService extends AbstractService implements
    * @return
    */
   private boolean checkAccess(UserGroupInformation callerUGI, String owner,
-      ApplicationAccessType operationPerformed,
-      RMApp application) {
-    return applicationsACLsManager.checkAccess(callerUGI, operationPerformed,
-        owner, application.getApplicationId())
-        || queueACLsManager.checkAccess(callerUGI, QueueACL.ADMINISTER_QUEUE,
-            application.getQueue());
+      ApplicationAccessType operationPerformed, RMApp application) {
+    return applicationsACLsManager
+        .checkAccess(callerUGI, operationPerformed, owner,
+            application.getApplicationId()) || queueACLsManager
+        .checkAccess(callerUGI, QueueACL.ADMINISTER_QUEUE,
+            application.getQueue(), application.getApplicationId(),
+            application.getName());
   }
 
   ApplicationId getNewApplicationId() {
@@ -438,7 +439,7 @@ public class ClientRMService extends AbstractService implements
       response = GetApplicationAttemptsResponse.newInstance(listAttempts);
     } else {
       throw new YarnException("User " + callerUGI.getShortUserName()
-          + " does not have privilage to see this aplication " + appId);
+          + " does not have privilage to see this application " + appId);
     }
     return response;
   }
@@ -489,7 +490,7 @@ public class ClientRMService extends AbstractService implements
           .createContainerReport());
     } else {
       throw new YarnException("User " + callerUGI.getShortUserName()
-          + " does not have privilage to see this aplication " + appId);
+          + " does not have privilage to see this application " + appId);
     }
     return response;
   }
@@ -542,14 +543,14 @@ public class ClientRMService extends AbstractService implements
       response = GetContainersResponse.newInstance(listContainers);
     } else {
       throw new YarnException("User " + callerUGI.getShortUserName()
-          + " does not have privilage to see this aplication " + appId);
+          + " does not have privilage to see this application " + appId);
     }
     return response;
   }
 
   @Override
   public SubmitApplicationResponse submitApplication(
-      SubmitApplicationRequest request) throws YarnException {
+      SubmitApplicationRequest request) throws YarnException, IOException {
     ApplicationSubmissionContext submissionContext = request
         .getApplicationSubmissionContext();
     ApplicationId applicationId = submissionContext.getApplicationId();
@@ -989,13 +990,14 @@ public class ClientRMService extends AbstractService implements
       used = schedulerNodeReport.getUsedResource();
       numContainers = schedulerNodeReport.getNumContainers();
     } 
-    
+
     NodeReport report =
         BuilderUtils.newNodeReport(rmNode.getNodeID(), rmNode.getState(),
             rmNode.getHttpAddress(), rmNode.getRackName(), used,
             rmNode.getTotalCapability(), numContainers,
             rmNode.getHealthReport(), rmNode.getLastHealthReportTime(),
-            rmNode.getNodeLabels());
+            rmNode.getNodeLabels(), rmNode.getAggregatedContainersUtilization(),
+            rmNode.getNodeUtilization());
 
     return report;
   }
@@ -1385,7 +1387,7 @@ public class ClientRMService extends AbstractService implements
     }
     // Check if user has access on the managed queue
     if (!queueACLsManager.checkAccess(callerUGI, QueueACL.SUBMIT_APPLICATIONS,
-        queueName)) {
+        queueName, null, null)) {
       RMAuditLogger.logFailure(
           callerUGI.getShortUserName(),
           auditConstant,
@@ -1448,6 +1450,8 @@ public class ClientRMService extends AbstractService implements
         RMAuditLogger.logSuccess(callerUGI.getShortUserName(),
             AuditConstants.UPDATE_APP_PRIORITY, "ClientRMService",
             applicationId);
+        response.setApplicationPriority(application
+            .getApplicationSubmissionContext().getPriority());
         return response;
       }
       String msg = "Application in " + application.getState()
@@ -1471,6 +1475,8 @@ public class ClientRMService extends AbstractService implements
 
     RMAuditLogger.logSuccess(callerUGI.getShortUserName(),
         AuditConstants.UPDATE_APP_PRIORITY, "ClientRMService", applicationId);
+    response.setApplicationPriority(application
+        .getApplicationSubmissionContext().getPriority());
     return response;
   }
 
@@ -1479,6 +1485,7 @@ public class ClientRMService extends AbstractService implements
    * After the request passes some sanity check, it will be delivered
    * to RMNodeImpl so that the next NM heartbeat will pick up the signal request
    */
+  @SuppressWarnings("unchecked")
   @Override
   public SignalContainerResponse signalContainer(
       SignalContainerRequest request) throws YarnException, IOException {

@@ -671,6 +671,11 @@ public class NameNode implements NameNodeStatusMXBean {
     NameNode.initMetrics(conf, this.getRole());
     StartupProgressMetrics.register(startupProgress);
 
+    pauseMonitor = new JvmPauseMonitor();
+    pauseMonitor.init(conf);
+    pauseMonitor.start();
+    metrics.getJvmMetrics().setPauseMonitor(pauseMonitor);
+
     if (NamenodeRole.NAMENODE == role) {
       startHttpServer(conf);
     }
@@ -690,12 +695,7 @@ public class NameNode implements NameNodeStatusMXBean {
       httpServer.setNameNodeAddress(getNameNodeAddress());
       httpServer.setFSImage(getFSImage());
     }
-    
-    pauseMonitor = new JvmPauseMonitor();
-    pauseMonitor.init(conf);
-    pauseMonitor.start();
-    metrics.getJvmMetrics().setPauseMonitor(pauseMonitor);
-    
+
     startCommonServices(conf);
     startMetricsLogger(conf);
   }
@@ -1019,6 +1019,22 @@ public class NameNode implements NameNodeStatusMXBean {
    */
   public InetSocketAddress getHttpsAddress() {
     return httpServer.getHttpsAddress();
+  }
+
+  /**
+   * @return NameNodeHttpServer, used by unit tests to ensure a full shutdown,
+   * so that no bind exception is thrown during restart.
+   */
+  @VisibleForTesting
+  public void joinHttpServer() {
+    if (httpServer != null) {
+      try {
+        httpServer.join();
+      } catch (InterruptedException e) {
+        LOG.info("Caught InterruptedException joining NameNodeHttpServer", e);
+        Thread.currentThread().interrupt();
+      }
+    }
   }
 
   /**

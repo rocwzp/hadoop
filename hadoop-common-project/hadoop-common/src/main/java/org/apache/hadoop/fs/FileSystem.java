@@ -36,6 +36,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.Stack;
@@ -62,6 +63,7 @@ import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
+import org.apache.hadoop.util.ClassUtil;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -71,6 +73,8 @@ import org.apache.htrace.core.Tracer;
 import org.apache.htrace.core.TraceScope;
 
 import com.google.common.annotations.VisibleForTesting;
+
+import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.*;
 
 /****************************************************************
  * An abstract base class for a fairly generic filesystem.  It
@@ -728,9 +732,9 @@ public abstract class FileSystem extends Configured implements Closeable {
         conf.getInt("io.bytes.per.checksum", 512), 
         64 * 1024, 
         getDefaultReplication(),
-        conf.getInt("io.file.buffer.size", 4096),
+        conf.getInt(IO_FILE_BUFFER_SIZE_KEY, IO_FILE_BUFFER_SIZE_DEFAULT),
         false,
-        CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_DEFAULT,
+        FS_TRASH_INTERVAL_DEFAULT,
         DataChecksum.Type.CRC32);
   }
 
@@ -770,7 +774,8 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @param f the file to open
    */
   public FSDataInputStream open(Path f) throws IOException {
-    return open(f, getConf().getInt("io.file.buffer.size", 4096));
+    return open(f, getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+        IO_FILE_BUFFER_SIZE_DEFAULT));
   }
 
   /**
@@ -791,7 +796,8 @@ public abstract class FileSystem extends Configured implements Closeable {
   public FSDataOutputStream create(Path f, boolean overwrite)
       throws IOException {
     return create(f, overwrite, 
-                  getConf().getInt("io.file.buffer.size", 4096),
+                  getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+                      IO_FILE_BUFFER_SIZE_DEFAULT),
                   getDefaultReplication(f),
                   getDefaultBlockSize(f));
   }
@@ -806,7 +812,8 @@ public abstract class FileSystem extends Configured implements Closeable {
   public FSDataOutputStream create(Path f, Progressable progress) 
       throws IOException {
     return create(f, true, 
-                  getConf().getInt("io.file.buffer.size", 4096),
+                  getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+                      IO_FILE_BUFFER_SIZE_DEFAULT),
                   getDefaultReplication(f),
                   getDefaultBlockSize(f), progress);
   }
@@ -820,7 +827,8 @@ public abstract class FileSystem extends Configured implements Closeable {
   public FSDataOutputStream create(Path f, short replication)
       throws IOException {
     return create(f, true, 
-                  getConf().getInt("io.file.buffer.size", 4096),
+                  getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+                      IO_FILE_BUFFER_SIZE_DEFAULT),
                   replication,
                   getDefaultBlockSize(f));
   }
@@ -836,11 +844,9 @@ public abstract class FileSystem extends Configured implements Closeable {
   public FSDataOutputStream create(Path f, short replication, 
       Progressable progress) throws IOException {
     return create(f, true, 
-                  getConf().getInt(
-                      CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_KEY,
-                      CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_DEFAULT),
-                  replication,
-                  getDefaultBlockSize(f), progress);
+                  getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+                      IO_FILE_BUFFER_SIZE_DEFAULT),
+                  replication, getDefaultBlockSize(f), progress);
   }
 
     
@@ -1149,19 +1155,22 @@ public abstract class FileSystem extends Configured implements Closeable {
     if (exists(f)) {
       return false;
     } else {
-      create(f, false, getConf().getInt("io.file.buffer.size", 4096)).close();
+      create(f, false, getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+          IO_FILE_BUFFER_SIZE_DEFAULT)).close();
       return true;
     }
   }
 
   /**
    * Append to an existing file (optional operation).
-   * Same as append(f, getConf().getInt("io.file.buffer.size", 4096), null)
+   * Same as append(f, getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+   *     IO_FILE_BUFFER_SIZE_DEFAULT), null)
    * @param f the existing file to be appended.
    * @throws IOException
    */
   public FSDataOutputStream append(Path f) throws IOException {
-    return append(f, getConf().getInt("io.file.buffer.size", 4096), null);
+    return append(f, getConf().getInt(IO_FILE_BUFFER_SIZE_KEY,
+        IO_FILE_BUFFER_SIZE_DEFAULT), null);
   }
   /**
    * Append to an existing file (optional operation).
@@ -1485,6 +1494,13 @@ public abstract class FileSystem extends Configured implements Closeable {
     return new ContentSummary.Builder().length(summary[0]).
         fileCount(summary[1]).directoryCount(summary[2]).
         spaceConsumed(summary[0]).build();
+  }
+
+  /** Return the {@link QuotaUsage} of a given {@link Path}.
+   * @param f path to use
+   */
+  public QuotaUsage getQuotaUsage(Path f) throws IOException {
+    return getContentSummary(f);
   }
 
   final private static PathFilter DEFAULT_FILTER = new PathFilter() {
@@ -2722,8 +2738,20 @@ public abstract class FileSystem extends Configured implements Closeable {
     synchronized (FileSystem.class) {
       if (!FILE_SYSTEMS_LOADED) {
         ServiceLoader<FileSystem> serviceLoader = ServiceLoader.load(FileSystem.class);
-        for (FileSystem fs : serviceLoader) {
-          SERVICE_FILE_SYSTEMS.put(fs.getScheme(), fs.getClass());
+        Iterator<FileSystem> it = serviceLoader.iterator();
+        while (it.hasNext()) {
+          FileSystem fs = null;
+          try {
+            fs = it.next();
+            try {
+              SERVICE_FILE_SYSTEMS.put(fs.getScheme(), fs.getClass());
+            } catch (Exception e) {
+              LOG.warn("Cannot load: " + fs + " from " +
+                  ClassUtil.findContainingJar(fs.getClass()), e);
+            }
+          } catch (ServiceConfigurationError ee) {
+            LOG.warn("Cannot load filesystem", ee);
+          }
         }
         FILE_SYSTEMS_LOADED = true;
       }
